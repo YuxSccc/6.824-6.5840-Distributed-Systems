@@ -24,6 +24,38 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
+type TaskType int
+
+const (
+	None TaskType = iota
+	Map
+	Reduce
+)
+
+type HeartBeatTaskDesc struct {
+	TaskType  TaskType
+	NReduce   int
+	TaskIndex int
+	// for map task InputPath use as filename, reduce task use as directory
+	InputPath string
+	// for map task OutputPath use as directory, reduce task use as filename
+	OutputPath   string
+	TaskIsFinish bool
+}
+
+type HeartBeatArgs struct {
+	Pid           int
+	CanAccessWork bool
+	TaskDesc      HeartBeatTaskDesc
+}
+
+type HeartBeatReply struct {
+	Pid       int
+	Teardown  bool
+	IsNewTask bool
+	IsAck     bool
+	TaskDesc  HeartBeatTaskDesc
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
