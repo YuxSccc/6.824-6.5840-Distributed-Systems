@@ -61,7 +61,7 @@ const (
 )
 
 const (
-	LeaderElectionTimeout         = time.Millisecond * 700
+	LeaderElectionTimeout         = time.Millisecond * 500
 	HeartbeatTimeout              = time.Millisecond * 150
 	AppendEntriesBroadcastTimeout = time.Millisecond * 150
 	ClientRequestTimeout          = time.Millisecond * 6000
@@ -81,19 +81,20 @@ type LogEntry struct {
 }
 
 type LoggingMutex struct {
-	m  sync.Mutex
-	me int
+	m       sync.Mutex
+	me      int
+	locklog []string
 }
 
 func (lm *LoggingMutex) Lock() {
 	//_, file, line, _ := runtime.Caller(1)
-	//log.Printf("[%d] Locking from %s:%d", lm.me, file, line)
+	//lm.locklog = append(lm.locklog, fmt.Sprintf("[%s] [%d] Locking from %s:%d", time.Now().GoString(), lm.me, file, line))
 	lm.m.Lock()
 }
 
 func (lm *LoggingMutex) Unlock() {
 	//_, file, line, _ := runtime.Caller(1)
-	//log.Printf("[%d] Unlocking from %s:%d", lm.me, file, line)
+	//lm.locklog = append(lm.locklog, fmt.Sprintf("[%s] [%d] Unlocking from %s:%d", time.Now().GoString(), lm.me, file, line))
 	lm.m.Unlock()
 }
 
@@ -128,7 +129,7 @@ type Raft struct {
 }
 
 func (rf *Raft) getRandomLeaderElectionTimeout() time.Duration {
-	return time.Millisecond * time.Duration(1000+rand.Int63()%500)
+	return time.Millisecond * time.Duration(500+rand.Int63()%500)
 }
 
 func (rf *Raft) isMajority(count int) bool {
@@ -781,7 +782,7 @@ func (rf *Raft) updateCommitIndex() {
 
 func (rf *Raft) degradeToFollowerWithMutexLocked() {
 	rf.setRole(RoleFollower)
-	rf.updateLastLeaderHeartbeatTimestamp()
+	//rf.updateLastLeaderHeartbeatTimestamp()
 	Info("EVENT: [%d] degrade to follower in Term[%d], leaderId[%d]", rf.me, rf.currentTerm, rf.leaderId)
 }
 
@@ -887,20 +888,22 @@ loop:
 }
 
 func (rf *Raft) updateFollowerStatus() {
-	rf.mu.Lock()
-	if rf.getRole() != RoleLeader {
-		return
-	}
+	var logSize, term int
 	needUpdateNextIndex := false
-	for i := 0; i < len(rf.peers); i++ {
-		if len(rf.log) > rf.nextIndex[i] || rf.matchIndex[i] < len(rf.log)-1 {
-			needUpdateNextIndex = true
-			break
+	func() {
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		if rf.getRole() != RoleLeader {
+			return
 		}
-	}
-
-	logSize, term := len(rf.log), rf.currentTerm
-	rf.mu.Unlock()
+		for i := 0; i < len(rf.peers); i++ {
+			if len(rf.log) > rf.nextIndex[i] || rf.matchIndex[i] < len(rf.log)-1 {
+				needUpdateNextIndex = true
+				break
+			}
+		}
+		logSize, term = len(rf.log), rf.currentTerm
+	}()
 
 	if needUpdateNextIndex {
 		if !rf.updateLogToFollowers(logSize, term) {
@@ -908,41 +911,43 @@ func (rf *Raft) updateFollowerStatus() {
 		}
 	}
 
-	rf.mu.Lock()
-	if rf.currentTerm != term {
-		return
-	}
-
-	tempNextIndex := make([]int, len(rf.peers))
-	copy(tempNextIndex, rf.nextIndex)
-
-	targetPos := (len(rf.peers) - 1) / 2
-	sort.Ints(tempNextIndex)
-	threshold := tempNextIndex[targetPos] - 1
-	flag := false
-	for i := threshold; i >= rf.commitIndex+1; i-- {
-		if rf.log[i].Term == rf.currentTerm {
-			threshold = i
-			flag = true
-			break
+	func() {
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		if rf.currentTerm != term {
+			return
 		}
-	}
-	if flag && rf.commitIndex < threshold {
-		for i := rf.commitIndex + 1; i <= threshold; i++ {
-			msg := ApplyMsg{}
-			msg.Command = rf.log[i].Data
-			msg.CommandValid = true
-			msg.CommandIndex = i + 1
-			// TODO: snapshot
-			rf.applyCh <- msg
+
+		tempNextIndex := make([]int, len(rf.peers))
+		copy(tempNextIndex, rf.nextIndex)
+
+		targetPos := (len(rf.peers) - 1) / 2
+		sort.Ints(tempNextIndex)
+		threshold := tempNextIndex[targetPos] - 1
+		flag := false
+		for i := threshold; i >= rf.commitIndex+1; i-- {
+			if rf.log[i].Term == rf.currentTerm {
+				threshold = i
+				flag = true
+				break
+			}
 		}
-		rf.commitIndex = threshold
-		Info("CommitUpdate: leader[%d] update commit index to [%d]", rf.me, rf.commitIndex)
-		//for idx, it := range tempNextIndex {
-		//	Info("%d %d", idx, it)
-		//}
-	}
-	rf.mu.Unlock()
+		if flag && rf.commitIndex < threshold {
+			for i := rf.commitIndex + 1; i <= threshold; i++ {
+				msg := ApplyMsg{}
+				msg.Command = rf.log[i].Data
+				msg.CommandValid = true
+				msg.CommandIndex = i + 1
+				// TODO: snapshot
+				rf.applyCh <- msg
+			}
+			rf.commitIndex = threshold
+			Info("CommitUpdate: leader[%d] update commit index to [%d]", rf.me, rf.commitIndex)
+			//for idx, it := range tempNextIndex {
+			//	Info("%d %d", idx, it)
+			//}
+		}
+	}()
 }
 
 func (rf *Raft) statusUpdateLoop() {
@@ -993,6 +998,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		rf.matchIndex[i] = -1
 	}
 	rf.mu.me = rf.me
+	rf.mu.locklog = make([]string, 0)
 
 	// Your initialization code here (2A, 2B, 2C).
 
