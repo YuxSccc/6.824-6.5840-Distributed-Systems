@@ -9,15 +9,20 @@ import (
 )
 
 // Debugging
-const Debug = true
+const DebugOpen = false
+const LogOpen = false
 
 var once sync.Once
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
+	if LogOpen {
 		log.Printf(format, a...)
 	}
 	return
+}
+
+func Debug(format string, v ...interface{}) {
+	logMessage("DEBUG", fmt.Sprintf(format, v...))
 }
 
 func Info(format string, v ...interface{}) {
@@ -42,7 +47,11 @@ func logMessage(level string, message string) {
 	once.Do(func() {
 		log.SetFlags(log.Lmicroseconds)
 	})
-	if !Debug && (level == "INFO" || level == "WARN") {
+	if !LogOpen && (level == "INFO" || level == "WARN" || level == "DEBUG") {
+		return
+	}
+
+	if !DebugOpen && level == "DEBUG" {
 		return
 	}
 
