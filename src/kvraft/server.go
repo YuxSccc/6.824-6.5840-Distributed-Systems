@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	RequestCheckFinalizedInterval = time.Millisecond * 10
+	RequestCheckFinalizedInterval = time.Millisecond * 4
 )
 
 type Op struct {
@@ -22,6 +22,10 @@ type Op struct {
 	ClientId      int64
 	Serial        int64
 	EmitTsInMilli int64
+}
+
+func (o *Op) GetSize() int {
+	return 64/8*3 + len(o.Key) + len(o.Value) + len(o.Type)
 }
 
 type KVServer struct {
@@ -38,6 +42,8 @@ type KVServer struct {
 	// Your definitions here.
 	kvMap             map[string]string
 	clientLastRequest map[int64]Op
+
+	hasOngoingActivelyHeartbeat int32
 }
 
 func (kv *KVServer) isLeader() bool {
@@ -61,6 +67,8 @@ func (kv *KVServer) waitRaftSync() Err {
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+	// TODO: performance: should have an actively triggered majority heartbeat RPC, otherwise,
+	// the heartbeat in Raft library will hit timeout every time in the worst case, it will be the latency of Get
 	if !kv.isLeader() {
 		reply.Err = ErrNotLeader
 		return
@@ -74,6 +82,14 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	requestTsInMilli := time.Now().UnixMilli()
 	value, ok := kv.kvMap[args.Key]
 	kv.mu.Unlock()
+
+	if kv.rf.GetLastMajorityHeartbeatTsInMilli() > requestTsInMilli &&
+		atomic.CompareAndSwapInt32(&kv.hasOngoingActivelyHeartbeat, 0, 1) {
+		go func() {
+			kv.rf.ActivelyTriggerHeartbeat()
+			atomic.StoreInt32(&kv.hasOngoingActivelyHeartbeat, 0)
+		}()
+	}
 
 	Debug("server[%d] Get(%s)[%d] wait finalized", kv.me, args.Key, args.Serial)
 	for {
@@ -153,22 +169,19 @@ func (kv *KVServer) handleCommandApplyMsg(msg *raft.ApplyMsg) {
 
 	if clientLastMsg, exist := kv.clientLastRequest[op.ClientId]; exist && clientLastMsg.Serial == op.Serial {
 		Debug("server[%d] get a duplicated [%s] message, skip", kv.me, op.Type)
-		kv.mu.Unlock()
-		return
-	}
-
-	if op.Type == OpPut {
-		kv.kvMap[op.Key] = op.Value
-	} else if op.Type == OpAppend {
-		oldValue, _ := kv.kvMap[op.Key]
-		kv.kvMap[op.Key] = oldValue + op.Value
-	} else if op.Type == OpNil {
 	} else {
-		FATAL("server[%d] Unknown op [%s]", kv.me, op.Type)
+		if op.Type == OpPut {
+			kv.kvMap[op.Key] = op.Value
+		} else if op.Type == OpAppend {
+			oldValue, _ := kv.kvMap[op.Key]
+			kv.kvMap[op.Key] = oldValue + op.Value
+		} else if op.Type == OpNil {
+		} else {
+			FATAL("server[%d] Unknown op [%s]", kv.me, op.Type)
+		}
+		kv.clientLastRequest[op.ClientId] = op
 	}
-
-	kv.clientLastRequest[op.ClientId] = op
-	kv.currentRaftState += 1
+	kv.currentRaftState += op.GetSize()
 	if kv.currentRaftState >= kv.maxRaftState {
 		kv.currentRaftState = 0
 		snapshot = kv.generateSnapshotWithLock()
@@ -177,7 +190,7 @@ func (kv *KVServer) handleCommandApplyMsg(msg *raft.ApplyMsg) {
 
 	if len(snapshot) > 0 {
 		kv.rf.Snapshot(msg.CommandIndex, snapshot)
-		Info("server[%d] snapshot with index[%d] successful", kv.me, msg.CommandIndex)
+		Debug("server[%d] snapshot with index[%d] successful", kv.me, msg.CommandIndex)
 	}
 }
 
@@ -186,11 +199,11 @@ func (kv *KVServer) handleSnapshotApplyMsg(msg *raft.ApplyMsg) {
 	defer kv.mu.Unlock()
 	r := bytes.NewBuffer(msg.Snapshot)
 	d := labgob.NewDecoder(r)
-
 	if d.Decode(&kv.kvMap) != nil ||
 		d.Decode(&kv.clientLastRequest) != nil {
 		FATAL("server[%d] handle snapshot caught an error", kv.me)
 	}
+	Info("server[%d] apply a new snapshot lastIndex=[%d]", kv.me, msg.SnapshotIndex)
 }
 
 func (kv *KVServer) applierLoop() {
@@ -264,6 +277,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.kvMap = make(map[string]string)
 	kv.mu.me = me
 	kv.mu.locklog = make([]string, 0)
+	kv.hasOngoingActivelyHeartbeat = 0
 
 	// You may need initialization code here.
 

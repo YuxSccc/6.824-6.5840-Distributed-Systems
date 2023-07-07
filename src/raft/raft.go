@@ -183,6 +183,7 @@ func (s *SnapshotPackage) setData(data []byte) {
 		s.reset()
 		return
 	}
+	s.Term = 0
 	s.Data = clone(data)
 }
 
@@ -475,7 +476,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	defer rf.mu.Unlock()
 	index -= 1
 	if rf.setSnapshotByLogWithMutexLocked(index, snapshot) {
-		Info("peer[%d] snapshot from log is set, lastIndex=[%d]", rf.me, index)
+		Debug("peer[%d] snapshot from log is set, lastIndex=[%d]", rf.me, index)
 	}
 }
 
@@ -1096,7 +1097,7 @@ func (rf *Raft) handleNextTermWithMutexLocked(newTerm int, leaderId int32, isEle
 	rf.persist()
 }
 
-func (rf *Raft) broadcastHeartBeat() {
+func (rf *Raft) broadcastHeartBeat(majority bool) {
 	requestList := make([]interface{}, 0, len(rf.peers))
 
 	func() {
@@ -1141,10 +1142,6 @@ func (rf *Raft) broadcastHeartBeat() {
 	receiveHeartbeatCnt := 1
 	for reply := range replyChan {
 		if reply.Status == RPCSuccessful {
-			receiveHeartbeatCnt += 1
-			if rf.isMajority(receiveHeartbeatCnt) {
-				atomic.StoreInt64(&rf.lastMajorityHeartbeatTs, time.Now().UnixMicro())
-			}
 			rawReply := reply.Reply.(*AppendEntriesReply)
 			if rawReply.Success == false {
 				rf.mu.Lock()
@@ -1161,16 +1158,29 @@ func (rf *Raft) broadcastHeartBeat() {
 				rf.reportFollowerNeedMoreLogWithMutexLocked(reply.Index, reqNextIndex, rawReply.PrevLogTerm)
 				rf.mu.Unlock()
 			}
+			receiveHeartbeatCnt += 1
+			if rf.isMajority(receiveHeartbeatCnt) {
+				atomic.StoreInt64(&rf.lastMajorityHeartbeatTs, time.Now().UnixMicro())
+				if majority {
+					return
+				}
+			}
 		} else if reply.Status == RPCFailed {
 			//Error("peer[%d] Heartbeat AppendEntries for peer[%d] failed, status=[%d]", rf.me, reply.Index, reply.Status)
 		}
 	}
 }
 
+func (rf *Raft) ActivelyTriggerHeartbeat() {
+	if rf.getRole() == RoleLeader {
+		rf.broadcastHeartBeat(true)
+	}
+}
+
 func (rf *Raft) leaderToFollowerHeartbeatLoop() {
 	for rf.killed() == false {
 		if rf.getRole() == RoleLeader {
-			rf.broadcastHeartBeat()
+			rf.broadcastHeartBeat(false)
 		}
 		if rf.getRole() == RoleLeader &&
 			time.Now().Sub(time.UnixMicro(atomic.LoadInt64(&rf.lastMajorityHeartbeatTs))) > LeaderNotReceiveMajorityTimeout {
