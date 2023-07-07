@@ -10,7 +10,7 @@ import (
 
 // Debugging
 const DebugOpen = false
-const LogOpen = false
+const LogOpen = true
 
 var once sync.Once
 
