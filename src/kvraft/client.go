@@ -70,7 +70,6 @@ func (ck *Clerk) updateLeaderWithLock() {
 		oriLeader := ck.leader
 		for i := 0; i < len(ck.servers); i++ {
 			args := GetLeaderArgs{}
-			args.E = 0
 			reply := GetLeaderReply{}
 			ok := ck.servers[ck.leader].Call(IsLeaderRPC, &args, &reply)
 			// TODO: broadcast GetLeader, rpc return term & leader

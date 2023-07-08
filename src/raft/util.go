@@ -4,13 +4,16 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
+	"time"
 )
 
 // Debugging
 const DebugOpen = false
 const LogOpen = false
+const OpenLoggingLock = false
 
 var once sync.Once
 
@@ -60,4 +63,30 @@ func logMessage(level string, message string) {
 	} else {
 		log.Printf("[%s:%d] [%d] [%s] %s\n", file, line, pid, level, message)
 	}
+}
+
+type LoggingMutex struct {
+	m       sync.Mutex
+	Me      int
+	Locklog []string
+}
+
+func (lm *LoggingMutex) Lock() {
+	if OpenLoggingLock {
+		_, file, line, _ := runtime.Caller(1)
+		lm.Locklog = append(lm.Locklog, fmt.Sprintf("[%d] [%d] Locking from %s:%d",
+			time.Now().Second(), lm.Me, filepath.Base(file), line))
+		Info("Lockpeer[%d]:lock %s", lm.Me, lm.Locklog[len(lm.Locklog)-1])
+	}
+	lm.m.Lock()
+}
+
+func (lm *LoggingMutex) Unlock() {
+	if OpenLoggingLock {
+		_, file, line, _ := runtime.Caller(1)
+		lm.Locklog = append(lm.Locklog, fmt.Sprintf("[%d] [%d] Unlocking from %s:%d",
+			time.Now().Second(), lm.Me, filepath.Base(file), line))
+		Info("Lockpeer[%d]:unlock %s", lm.Me, lm.Locklog[len(lm.Locklog)-1])
+	}
+	lm.m.Unlock()
 }

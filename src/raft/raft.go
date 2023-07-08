@@ -66,18 +66,18 @@ const (
 // 1. LeaderNotReceiveMajorityTimeout < LeaderElectionTimeout (avoid multi leader)
 // 2. LeaderNotReceiveMajorityTimeout < RequestTimeout in application server (avoid stale leader)
 
+// TODO: maybe notification for ApplyLoop & LeaderLoop is needed (Performance).
+
 const (
 	LeaderElectionTimeout           = time.Millisecond * 700
-	HeartbeatTimeout                = time.Millisecond * 150
+	HeartbeatTimeout                = time.Millisecond * 50
 	AppendEntriesBroadcastTimeout   = time.Millisecond * 150
 	LeaderNotReceiveMajorityTimeout = time.Millisecond * 500
 	InstallSnapshotTimeout          = time.Millisecond * 150
-	ClientRequestTimeout            = time.Millisecond * 6000
 
-	RequestVoteSuccessCheckInterval = time.Millisecond * 10
-	HeartbeatInterval               = time.Millisecond * 10
-	LeaderLoopInterval              = time.Millisecond * 10
-	ApplyLoopInterval               = time.Millisecond * 10
+	HeartbeatInterval  = time.Millisecond * 10
+	LeaderLoopInterval = time.Millisecond * 10
+	ApplyLoopInterval  = time.Millisecond * 10
 
 	NextIndexMismatchDecreaseCount = 100
 	RequestVoteMethodName          = "Raft.RequestVote"
@@ -89,26 +89,6 @@ type LogEntry struct {
 	Term       int
 	IndexInLog int
 	Data       interface{}
-}
-
-type LoggingMutex struct {
-	m       sync.Mutex
-	me      int
-	locklog []string
-}
-
-func (lm *LoggingMutex) Lock() {
-	//_, file, line, _ := runtime.Caller(1)
-	//lm.locklog = append(lm.locklog, fmt.Sprintf("[%s] [%d] Locking from %s:%d", time.Now().GoString(), lm.me, file, line))
-	//Info("Lockpeer[%d]:lock %s", lm.me, lm.locklog[len(lm.locklog)-1])
-	lm.m.Lock()
-}
-
-func (lm *LoggingMutex) Unlock() {
-	//_, file, line, _ := runtime.Caller(1)
-	//lm.locklog = append(lm.locklog, fmt.Sprintf("[%s] [%d] Unlocking from %s:%d", time.Now().GoString(), lm.me, file, line))
-	//Info("Lockpeer[%d]:unlock %s", lm.me, lm.locklog[len(lm.locklog)-1])
-	lm.m.Unlock()
 }
 
 // A Go object implementing a single Raft peer.
@@ -1134,7 +1114,7 @@ func (rf *Raft) broadcastHeartBeat(majority bool) {
 	if rf.getRole() != RoleLeader || len(requestList) != len(rf.peers) {
 		return
 	}
-	replyChan := rf.asyncBroadcastToAllFollowers(requestList, AppendEntriesBroadcastTimeout,
+	replyChan := rf.asyncBroadcastToAllFollowers(requestList, HeartbeatTimeout,
 		AppendEntriesMethodName)
 
 	// wait all received
@@ -1370,8 +1350,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		rf.nextIndex[i] = 0
 		rf.matchIndex[i] = -1
 	}
-	rf.mu.me = rf.me
-	rf.mu.locklog = make([]string, 0)
+	rf.mu.Me = rf.me
+	rf.mu.Locklog = make([]string, 0)
 
 	// Your initialization code here (2A, 2B, 2C).
 

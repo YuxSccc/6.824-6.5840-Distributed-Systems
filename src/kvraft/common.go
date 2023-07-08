@@ -101,32 +101,8 @@ type GetReply struct {
 	Value string
 }
 
-type GetLeaderArgs struct {
-	E int
-}
+type GetLeaderArgs struct{}
 
 type GetLeaderReply struct {
 	IsLeader bool
-}
-
-type LoggingMutex struct {
-	m       sync.Mutex
-	me      int
-	locklog []string
-}
-
-func (lm *LoggingMutex) Lock() {
-	//_, file, line, _ := runtime.Caller(1)
-	//lm.locklog = append(lm.locklog, fmt.Sprintf("[%d] [%d] Locking from %s:%d",
-	//	time.Now().Second(), lm.me, filepath.Base(file), line))
-	//Info("Lockpeer[%d]:lock %s", lm.me, lm.locklog[len(lm.locklog)-1])
-	lm.m.Lock()
-}
-
-func (lm *LoggingMutex) Unlock() {
-	//_, file, line, _ := runtime.Caller(1)
-	//lm.locklog = append(lm.locklog, fmt.Sprintf("[%d] [%d] Unlocking from %s:%d",
-	//	time.Now().Second(), lm.me, filepath.Base(file), line))
-	//Info("Lockpeer[%d]:unlock %s", lm.me, lm.locklog[len(lm.locklog)-1])
-	lm.m.Unlock()
 }

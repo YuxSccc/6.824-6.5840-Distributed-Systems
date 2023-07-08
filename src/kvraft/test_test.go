@@ -1,6 +1,9 @@
 package kvraft
 
-import "6.5840/porcupine"
+import (
+	"6.5840/porcupine"
+	"flag"
+)
 import "6.5840/models"
 import "testing"
 import "strconv"
@@ -42,6 +45,7 @@ func (log *OpLog) Read() []porcupine.Operation {
 // clock), we measure time relative to `t0` using `time.Since(t0)`, which uses
 // the monotonic clock
 var t0 = time.Now()
+var perf = flag.Bool("perf", false, "Run performance tests")
 
 // get/put/putappend that keep counts
 func Get(cfg *config, ck *Clerk, key string, log *OpLog, cli int) string {
@@ -420,6 +424,81 @@ func GenericTestSpeed(t *testing.T, part string, maxraftstate int) {
 	}
 
 	cfg.end()
+}
+
+// Check that ops are committed fast enough, better than 1 per heartbeat interval
+func GenericTestSpeedWithMultiClient(t *testing.T, part string, maxraftstate int, clientCount int, numOps int, readRatio float64) {
+	const nservers = 3
+	cfg := make_config(t, nservers, false, maxraftstate)
+	defer cfg.cleanup()
+
+	var ckList []*Clerk
+	opsList := make([]float64, clientCount)
+
+	for i := 0; i < clientCount; i++ {
+		ckList = append(ckList, cfg.makeClient(cfg.All()))
+	}
+
+	cfg.begin(fmt.Sprintf("Test: multi client perf test in (%s)", part))
+
+	// wait until first op completes, so we know a leader is elected
+	// and KV servers are ready to process client requests
+	var wg sync.WaitGroup
+
+	getRandKey := func() string {
+		return "x" + strconv.Itoa(rand.Int()%clientCount)
+	}
+
+	for i := 0; i < clientCount; i++ {
+		wg.Add(1)
+		go func(index int) {
+			ck := ckList[index]
+
+			start := time.Now()
+			for i := 0; i < numOps; i++ {
+				if rand.Float64() < readRatio {
+					ck.Get(getRandKey())
+				} else {
+					ck.Put(getRandKey(), "x 0 "+strconv.Itoa(i)+" y")
+				}
+			}
+			dur := time.Since(start)
+
+			// heartbeat interval should be ~ 100 ms; require at least 3 ops per
+			opsList[index] = float64(numOps) / float64(dur.Milliseconds()) * 1000.0
+			wg.Done()
+		}(i)
+	}
+
+	wg.Wait()
+	cfg.end()
+	sumOps := 0.0
+	for i := 0; i < clientCount; i++ {
+		sumOps += opsList[i]
+	}
+	fmt.Printf("Perf test: Ops=%.2f with %d clients, readRatio=%.2f%%\n", sumOps, clientCount, readRatio*100.0)
+}
+
+func TestPerf3A(t *testing.T) {
+	if *perf {
+		GenericTestSpeedWithMultiClient(t, "3A", -1, 100, 100, 0.0)
+		GenericTestSpeedWithMultiClient(t, "3A", -1, 100, 100, 1.0)
+
+		GenericTestSpeedWithMultiClient(t, "3A", -1, 5, 100, 0.0)
+		GenericTestSpeedWithMultiClient(t, "3A", -1, 5, 100, 1)
+		GenericTestSpeedWithMultiClient(t, "3A", -1, 40, 100, 1)
+		GenericTestSpeedWithMultiClient(t, "3A", -1, 5, 100, 0.5)
+		GenericTestSpeedWithMultiClient(t, "3A", -1, 10, 50, 0.5)
+		GenericTestSpeedWithMultiClient(t, "3A", -1, 20, 50, 0.5)
+	}
+}
+
+func TestPerf3B(t *testing.T) {
+	if *perf {
+		GenericTestSpeedWithMultiClient(t, "3B", 1000, 5, 100, 0.1)
+		GenericTestSpeedWithMultiClient(t, "3B", 1000, 5, 100, 1)
+		GenericTestSpeedWithMultiClient(t, "3B", 1000, 5, 100, 0.5)
+	}
 }
 
 func TestBasic3A(t *testing.T) {

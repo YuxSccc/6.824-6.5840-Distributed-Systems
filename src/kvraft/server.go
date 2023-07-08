@@ -29,7 +29,7 @@ func (o *Op) GetSize() int {
 }
 
 type KVServer struct {
-	mu        LoggingMutex
+	mu        raft.LoggingMutex
 	syncMutex sync.Mutex
 	me        int
 	rf        *raft.Raft
@@ -275,8 +275,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.currentRaftState = 0
 	kv.clientLastRequest = make(map[int64]Op)
 	kv.kvMap = make(map[string]string)
-	kv.mu.me = me
-	kv.mu.locklog = make([]string, 0)
+	kv.mu.Me = me
+	kv.mu.Locklog = make([]string, 0)
 	kv.hasOngoingActivelyHeartbeat = 0
 
 	// You may need initialization code here.
